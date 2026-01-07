@@ -1,0 +1,34 @@
+{
+  "mediaDirs": ["/mnt/media", "/mnt/overflow"],
+  "tempDir": "/tmp/danger-transcode",
+  "databasePath": "/var/lib/danger-transcode/database.json",
+  "errorLogPath": "/var/lib/danger-transcode/errors.json",
+  "lockFilePath": "/tmp/danger-transcode.lock",
+  "maxConcurrency": 1,
+  "tvMaxHeight": 720,
+  "movieMaxHeight": 1080,
+  "bitrates": {
+    "low": "2M",
+    "medium": "5M",
+    "high": "15M"
+  },
+  "videoExtensions": [
+    ".mkv",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".m4v",
+    ".wmv",
+    ".flv",
+    ".webm",
+    ".ts",
+    ".m2ts",
+    ".mpg",
+    ".mpeg",
+    ".vob"
+  ],
+  "ffmpegPath": "ffmpeg",
+  "ffprobePath": "ffprobe",
+  "useHardwareAccel": true,
+  "dryRun": false
+}

@@ -1,0 +1,51 @@
+# Deno
+.deno/
+deno.lock
+
+# Dependencies (vendored)
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+*.pid
+*.seed
+*.log
+
+# Database and state files
+database.json
+errors.json
+*.backup
+
+# Temp files
+*.tmp
+*.temp
+.transcoding/
+
+# Config with potential secrets (keep example)
+config.json
+!config.example.json
+
+# Build output
+dist/
+build/
+out/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
