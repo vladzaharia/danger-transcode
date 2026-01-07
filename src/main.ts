@@ -247,14 +247,52 @@ async function main(): Promise<void> {
     logger.info(`Estimated time: ${formatDuration(totalEstimate)}`);
 
     if (config.dryRun) {
-      logger.info('Dry run mode - listing files that would be transcoded:');
+      console.log('\n' + '='.repeat(60));
+      console.log('DRY RUN - No changes will be made');
+      console.log('='.repeat(60));
+
+      // Show files to transcode first
+      console.log(`\n⚡ WILL TRANSCODE (${scanResult.toTranscode.length} files):`);
       for (const file of scanResult.toTranscode) {
-        console.log(`  ${file.path}`);
-        console.log(`    Type: ${file.type}, Codec: ${file.codec}`);
+        const action =
+          file.codec.toLowerCase().includes('hevc') || file.codec.toLowerCase().includes('h265')
+            ? 'scale'
+            : 'convert';
         console.log(
-          `    Resolution: ${file.width}x${file.height} -> ${file.targetWidth}x${file.targetHeight}`,
+          `  → ${file.path} [${file.codec} ${file.width}x${file.height} → HEVC ${file.targetWidth}x${file.targetHeight}, ${action}]`,
         );
       }
+
+      // Show skipped files (already HEVC at target resolution, etc.)
+      if (scanResult.skipped.length > 0) {
+        console.log(`\n✓ SKIPPED (${scanResult.skipped.length} files):`);
+        for (const { path, reason } of scanResult.skipped.slice(0, 50)) {
+          console.log(`  ✓ ${path} [${reason}]`);
+        }
+        if (scanResult.skipped.length > 50) {
+          console.log(`  ... and ${scanResult.skipped.length - 50} more`);
+        }
+      }
+
+      // Show excluded files
+      if (scanResult.excluded.length > 0) {
+        console.log(`\n⊘ EXCLUDED (${scanResult.excluded.length} files):`);
+        for (const { path, reason } of scanResult.excluded.slice(0, 50)) {
+          console.log(`  ⊘ ${path} [${reason}]`);
+        }
+        if (scanResult.excluded.length > 50) {
+          console.log(`  ... and ${scanResult.excluded.length - 50} more`);
+        }
+      }
+
+      // Summary
+      console.log('\n' + '='.repeat(60));
+      console.log('SUMMARY:');
+      console.log(`  To transcode: ${scanResult.toTranscode.length}`);
+      console.log(`  Skipped:      ${scanResult.skipped.length}`);
+      console.log(`  Excluded:     ${scanResult.excluded.length}`);
+      console.log('='.repeat(60) + '\n');
+
       await releaseLock(config);
       Deno.exit(0);
     }

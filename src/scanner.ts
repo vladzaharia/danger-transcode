@@ -403,27 +403,32 @@ export async function analyzeFile(
     const mediaType = classifyMediaType(filePath);
     const isAlreadyHEVC = isHEVC(probe.video.codec_name);
 
-    // Determine if transcoding is needed
-    let needsTranscode = !isAlreadyHEVC;
-    let skipReason: string | undefined;
-
-    if (isAlreadyHEVC) {
-      skipReason = 'Already HEVC';
-      needsTranscode = false;
-    }
-
-    // Calculate target resolution
+    // Calculate target resolution (null if no scaling needed)
     const target = calculateTargetResolution(
       probe.video.width,
       probe.video.height,
       mediaType,
       config,
     );
+    const needsScaling = target !== null;
 
-    // If already HEVC but needs scaling, we should still transcode
-    if (target && isAlreadyHEVC) {
+    // Determine if transcoding is needed:
+    // - Not HEVC → needs transcode (to convert to HEVC)
+    // - HEVC but too high resolution → needs transcode (to scale down)
+    // - HEVC at/below target resolution → skip (already optimal)
+    let needsTranscode = false;
+    let skipReason: string | undefined;
+
+    if (!isAlreadyHEVC) {
+      // Need to convert to HEVC
       needsTranscode = true;
-      skipReason = undefined;
+    } else if (needsScaling) {
+      // Already HEVC but resolution too high - need to scale down
+      needsTranscode = true;
+    } else {
+      // Already HEVC and at/below target resolution - skip
+      needsTranscode = false;
+      skipReason = `Already HEVC at ${probe.video.height}p`;
     }
 
     const mediaFile: MediaFile = {
