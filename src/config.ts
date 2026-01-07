@@ -51,6 +51,33 @@ export const DEFAULT_CONFIG: Config = {
     '.3gp',
   ],
 
+  // Exclusion rules - files/directories to skip
+  exclusions: {
+    // Directory names to exclude (case-insensitive)
+    directories: [
+      'karaoke',
+      'singalong',
+      'samples',
+      'sample',
+      'extras',
+      'featurettes',
+      'behind the scenes',
+      'deleted scenes',
+      'interviews',
+      'trailers',
+    ],
+    // Regex patterns matched against full path
+    pathPatterns: [],
+    // Regex patterns matched against filename only
+    filePatterns: [
+      '-sample\\.', // sample files like movie-sample.mkv
+      '\\bsample\\b', // word "sample" in filename
+      '\\btrailer\\b', // trailers
+    ],
+    // Simple string contains check on path (case-insensitive)
+    pathContains: [],
+  },
+
   // FFmpeg/FFprobe paths (use system default)
   ffmpegPath: 'ffmpeg',
   ffprobePath: 'ffprobe',

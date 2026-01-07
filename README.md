@@ -146,9 +146,67 @@ Create a JSON config file:
     "low": "2M",
     "medium": "5M",
     "high": "15M"
+  },
+  "exclusions": {
+    "directories": ["karaoke", "samples", "extras"],
+    "pathPatterns": [],
+    "filePatterns": ["-sample\\.", "\\btrailer\\b"],
+    "pathContains": []
   }
 }
 ```
+
+## Exclusion System
+
+Files and directories can be excluded from transcoding using four methods:
+
+### Directory Exclusions
+
+Exclude entire directories by name (case-insensitive, matches any path component):
+
+```json
+"directories": ["karaoke", "singalong", "samples", "extras", "featurettes"]
+```
+
+Any file under a path containing these directory names will be skipped.
+
+### Path Contains
+
+Simple string matching against the full path (case-insensitive):
+
+```json
+"pathContains": ["/backup/", "/temp/"]
+```
+
+### File Patterns
+
+Regex patterns matched against the filename only:
+
+```json
+"filePatterns": [
+  "-sample\\.",
+  "\\bsample\\b",
+  "\\btrailer\\b"
+]
+```
+
+### Path Patterns
+
+Regex patterns matched against the full path:
+
+```json
+"pathPatterns": [
+  "/archive/.*\\.mkv$",
+  ".*\\(1080p\\).*"
+]
+```
+
+### Default Exclusions
+
+By default, the following are excluded:
+
+- **Directories**: karaoke, singalong, samples, sample, extras, featurettes, behind the scenes, deleted scenes, interviews, trailers
+- **File patterns**: Files containing "sample" or "trailer" in the name
 
 ## Media Classification
 

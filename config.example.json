@@ -27,6 +27,27 @@
     ".mpeg",
     ".vob"
   ],
+  "exclusions": {
+    "directories": [
+      "karaoke",
+      "singalong",
+      "samples",
+      "sample",
+      "extras",
+      "featurettes",
+      "behind the scenes",
+      "deleted scenes",
+      "interviews",
+      "trailers"
+    ],
+    "pathPatterns": [],
+    "filePatterns": [
+      "-sample\\.",
+      "\\bsample\\b",
+      "\\btrailer\\b"
+    ],
+    "pathContains": []
+  },
   "ffmpegPath": "ffmpeg",
   "ffprobePath": "ffprobe",
   "useHardwareAccel": true,

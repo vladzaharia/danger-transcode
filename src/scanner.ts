@@ -33,6 +33,67 @@ const TV_FOLDER_PATTERNS = [/tv\s*shows?/i, /series/i, /seasons?/i, /episodes?/i
 const MOVIE_FOLDER_PATTERNS = [/movies?/i, /films?/i];
 
 //═══════════════════════════════════════════════════════════════════════════════
+// EXCLUSION SYSTEM
+//═══════════════════════════════════════════════════════════════════════════════
+
+/** Result of checking exclusion rules */
+export interface ExclusionCheck {
+  excluded: boolean;
+  reason?: string;
+}
+
+/**
+ * Check if a file should be excluded based on configured rules
+ */
+export function checkExclusions(filePath: string, config: Config): ExclusionCheck {
+  const { exclusions } = config;
+  const pathLower = filePath.toLowerCase();
+  const fileName = basename(filePath);
+  const pathParts = filePath.split('/').map((p) => p.toLowerCase());
+
+  // Check directory exclusions
+  for (const dir of exclusions.directories) {
+    const dirLower = dir.toLowerCase();
+    if (pathParts.includes(dirLower)) {
+      return { excluded: true, reason: `Directory excluded: ${dir}` };
+    }
+  }
+
+  // Check pathContains (simple string match)
+  for (const needle of exclusions.pathContains) {
+    if (pathLower.includes(needle.toLowerCase())) {
+      return { excluded: true, reason: `Path contains: ${needle}` };
+    }
+  }
+
+  // Check path patterns (regex against full path)
+  for (const pattern of exclusions.pathPatterns) {
+    try {
+      const regex = new RegExp(pattern, 'i');
+      if (regex.test(filePath)) {
+        return { excluded: true, reason: `Path matches pattern: ${pattern}` };
+      }
+    } catch {
+      logger.warn(`Invalid regex pattern: ${pattern}`);
+    }
+  }
+
+  // Check file patterns (regex against filename only)
+  for (const pattern of exclusions.filePatterns) {
+    try {
+      const regex = new RegExp(pattern, 'i');
+      if (regex.test(fileName)) {
+        return { excluded: true, reason: `Filename matches pattern: ${pattern}` };
+      }
+    } catch {
+      logger.warn(`Invalid regex pattern: ${pattern}`);
+    }
+  }
+
+  return { excluded: false };
+}
+
+//═══════════════════════════════════════════════════════════════════════════════
 // DISCOVERY PHASE - Find video files
 //═══════════════════════════════════════════════════════════════════════════════
 
@@ -45,6 +106,7 @@ export interface DiscoveredFile {
 /** Result of the discovery phase */
 export interface DiscoveryResult {
   files: DiscoveredFile[];
+  excluded: { path: string; reason: string }[];
   skippedDirs: string[];
   totalSize: number;
 }
@@ -57,14 +119,18 @@ export function isVideoFile(filePath: string, config: Config): boolean {
   return config.videoExtensions.includes(ext);
 }
 
+/** Internal result from scanning a directory */
+interface DirectoryScanResult {
+  files: DiscoveredFile[];
+  excluded: { path: string; reason: string }[];
+}
+
 /**
  * Discover all video files in a single directory (recursive)
  */
-async function discoverDirectory(
-  dirPath: string,
-  config: Config,
-): Promise<DiscoveredFile[]> {
+async function discoverDirectory(dirPath: string, config: Config): Promise<DirectoryScanResult> {
   const files: DiscoveredFile[] = [];
+  const excluded: { path: string; reason: string }[] = [];
 
   for await (
     const entry of walk(dirPath, {
@@ -72,21 +138,31 @@ async function discoverDirectory(
       followSymlinks: false,
     })
   ) {
-    if (isVideoFile(entry.path, config)) {
-      try {
-        const stat = await Deno.stat(entry.path);
-        files.push({
-          path: entry.path,
-          size: stat.size,
-        });
-      } catch {
-        // Skip files we can't stat
-        logger.debug(`Cannot stat file: ${entry.path}`);
-      }
+    if (!isVideoFile(entry.path, config)) {
+      continue;
+    }
+
+    // Check exclusion rules
+    const exclusionCheck = checkExclusions(entry.path, config);
+    if (exclusionCheck.excluded) {
+      excluded.push({ path: entry.path, reason: exclusionCheck.reason ?? 'Excluded' });
+      logger.debug(`Excluded: ${entry.path} (${exclusionCheck.reason})`);
+      continue;
+    }
+
+    try {
+      const stat = await Deno.stat(entry.path);
+      files.push({
+        path: entry.path,
+        size: stat.size,
+      });
+    } catch {
+      // Skip files we can't stat
+      logger.debug(`Cannot stat file: ${entry.path}`);
     }
   }
 
-  return files;
+  return { files, excluded };
 }
 
 /**
@@ -96,6 +172,7 @@ async function discoverDirectory(
 export async function discoverMediaFiles(config: Config): Promise<DiscoveryResult> {
   const result: DiscoveryResult = {
     files: [],
+    excluded: [],
     skippedDirs: [],
     totalSize: 0,
   };
@@ -119,12 +196,20 @@ export async function discoverMediaFiles(config: Config): Promise<DiscoveryResul
       throw error;
     }
 
-    const files = await discoverDirectory(mediaDir, config);
-    result.files.push(...files);
+    const dirResult = await discoverDirectory(mediaDir, config);
+    result.files.push(...dirResult.files);
+    result.excluded.push(...dirResult.excluded);
   }
 
   result.totalSize = result.files.reduce((sum, f) => sum + f.size, 0);
-  logger.info(`Discovery complete: ${result.files.length} video files found`);
+
+  if (result.excluded.length > 0) {
+    logger.info(
+      `Discovery complete: ${result.files.length} video files found, ${result.excluded.length} excluded`,
+    );
+  } else {
+    logger.info(`Discovery complete: ${result.files.length} video files found`);
+  }
 
   return result;
 }
@@ -392,6 +477,7 @@ export interface ScanResult {
   totalFiles: number;
   toTranscode: MediaFile[];
   skipped: { path: string; reason: string }[];
+  excluded: { path: string; reason: string }[];
   errors: string[];
 }
 
@@ -410,7 +496,9 @@ export async function scanMediaDirectories(
   // Filter by database state
   const { toAnalyze, alreadyDone, tooManyErrors } = filterByDatabaseState(discovery.files, db);
 
-  logger.info(`Found ${discovery.files.length} video files`);
+  logger.info(
+    `Found ${discovery.files.length} video files (${discovery.excluded.length} excluded)`,
+  );
   logger.info(`  Already transcoded: ${alreadyDone.length}`);
   logger.info(`  Too many errors: ${tooManyErrors.length}`);
   logger.info(`  To analyze: ${toAnalyze.length}`);
@@ -424,13 +512,14 @@ export async function scanMediaDirectories(
 
   // Combine results
   const result: ScanResult = {
-    totalFiles: discovery.files.length,
+    totalFiles: discovery.files.length + discovery.excluded.length,
     toTranscode: analysis.toTranscode,
     skipped: [
       ...alreadyDone.map((path) => ({ path, reason: 'Already transcoded' })),
       ...tooManyErrors.map((path) => ({ path, reason: 'Too many errors' })),
       ...analysis.skipped,
     ],
+    excluded: discovery.excluded,
     errors: analysis.errors.map((e) => e.path),
   };
 
