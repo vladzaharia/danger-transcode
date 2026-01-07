@@ -218,6 +218,25 @@ export async function transcodeFile(
 }
 
 /**
+ * Move a file, handling cross-filesystem moves by falling back to copy+delete
+ */
+async function moveFile(src: string, dest: string): Promise<void> {
+  try {
+    // Try rename first (fast, same filesystem)
+    await Deno.rename(src, dest);
+  } catch (error) {
+    // Check if it's a cross-device error (EXDEV)
+    if (error instanceof Error && error.message.includes('cross-device')) {
+      // Fall back to copy + delete
+      await Deno.copyFile(src, dest);
+      await Deno.remove(src);
+    } else {
+      throw error;
+    }
+  }
+}
+
+/**
  * Replace the original file with the transcoded version
  * Preserves file permissions and timestamps where possible
  */
@@ -229,11 +248,11 @@ async function replaceOriginalFile(
   const backupPath = originalPath + '.backup';
 
   try {
-    // Rename original to backup
+    // Rename original to backup (same filesystem, should always work)
     await Deno.rename(originalPath, backupPath);
 
-    // Move transcoded file to original location
-    await Deno.rename(transcodedPath, originalPath);
+    // Move transcoded file to original location (may be cross-filesystem)
+    await moveFile(transcodedPath, originalPath);
 
     // Remove backup
     await Deno.remove(backupPath);
