@@ -175,13 +175,42 @@ export async function transcodeFile(
 
     const endTime = Date.now();
     const duration = (endTime - startTime) / 1000;
+    const sizeReduction = Math.round((1 - newStat.size / originalStat.size) * 100);
 
     logger.info(`Transcode complete: ${formatDuration(duration)}`);
     logger.info(
-      `  Size: ${formatFileSize(originalStat.size)} -> ${formatFileSize(newStat.size)} (${
-        Math.round((1 - newStat.size / originalStat.size) * 100)
-      }% reduction)`,
+      `  Size: ${formatFileSize(originalStat.size)} -> ${
+        formatFileSize(newStat.size)
+      } (${sizeReduction}% ${sizeReduction >= 0 ? 'reduction' : 'increase'})`,
     );
+
+    // Only replace if the new file is smaller
+    if (newStat.size >= originalStat.size) {
+      logger.warn(
+        `Skipping replacement: transcoded file is not smaller (${formatFileSize(newStat.size)} >= ${
+          formatFileSize(originalStat.size)
+        })`,
+      );
+      // Clean up temp file
+      await Deno.remove(tempOutputPath);
+      return {
+        success: true,
+        record: {
+          originalPath: file.path,
+          transcodedAt: new Date().toISOString(),
+          originalCodec: file.codec,
+          originalWidth: file.width,
+          originalHeight: file.height,
+          newWidth: file.width, // Kept original
+          newHeight: file.height, // Kept original
+          originalSize: originalStat.size,
+          newSize: originalStat.size, // Kept original
+          duration,
+          success: true,
+          error: 'Transcoded file was not smaller - kept original',
+        },
+      };
+    }
 
     // Replace original file with transcoded version
     await replaceOriginalFile(file.path, tempOutputPath);
