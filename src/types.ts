@@ -99,16 +99,16 @@ export interface BitrateConfig {
   high: string;
 }
 
-/** Exclusion rules configuration */
+/** Exclusion rules configuration (all fields optional) */
 export interface ExclusionRules {
   /** Directory names to exclude (case-insensitive, matches any path component) */
-  directories: string[];
+  directories?: string[];
   /** Patterns to match against full path (regex strings) */
-  pathPatterns: string[];
+  pathPatterns?: string[];
   /** Patterns to match against filename only (regex strings) */
-  filePatterns: string[];
+  filePatterns?: string[];
   /** Literal strings that if found in path, exclude the file */
-  pathContains: string[];
+  pathContains?: string[];
 }
 
 /** Main configuration */
@@ -133,8 +133,8 @@ export interface Config {
   bitrates: BitrateConfig;
   /** Video file extensions to process */
   videoExtensions: string[];
-  /** Exclusion rules for skipping files */
-  exclusions: ExclusionRules;
+  /** Exclusion rules for skipping files (optional) */
+  exclusions?: ExclusionRules;
   /** FFmpeg binary path (default: 'ffmpeg') */
   ffmpegPath: string;
   /** FFprobe binary path (default: 'ffprobe') */

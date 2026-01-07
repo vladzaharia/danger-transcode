@@ -46,47 +46,59 @@ export interface ExclusionCheck {
  * Check if a file should be excluded based on configured rules
  */
 export function checkExclusions(filePath: string, config: Config): ExclusionCheck {
-  const { exclusions } = config;
+  const exclusions = config.exclusions;
+  if (!exclusions) {
+    return { excluded: false };
+  }
+
   const pathLower = filePath.toLowerCase();
   const fileName = basename(filePath);
   const pathParts = filePath.split('/').map((p) => p.toLowerCase());
 
   // Check directory exclusions
-  for (const dir of exclusions.directories) {
-    const dirLower = dir.toLowerCase();
-    if (pathParts.includes(dirLower)) {
-      return { excluded: true, reason: `Directory excluded: ${dir}` };
+  if (exclusions.directories?.length) {
+    for (const dir of exclusions.directories) {
+      const dirLower = dir.toLowerCase();
+      if (pathParts.includes(dirLower)) {
+        return { excluded: true, reason: `Directory excluded: ${dir}` };
+      }
     }
   }
 
   // Check pathContains (simple string match)
-  for (const needle of exclusions.pathContains) {
-    if (pathLower.includes(needle.toLowerCase())) {
-      return { excluded: true, reason: `Path contains: ${needle}` };
+  if (exclusions.pathContains?.length) {
+    for (const needle of exclusions.pathContains) {
+      if (pathLower.includes(needle.toLowerCase())) {
+        return { excluded: true, reason: `Path contains: ${needle}` };
+      }
     }
   }
 
   // Check path patterns (regex against full path)
-  for (const pattern of exclusions.pathPatterns) {
-    try {
-      const regex = new RegExp(pattern, 'i');
-      if (regex.test(filePath)) {
-        return { excluded: true, reason: `Path matches pattern: ${pattern}` };
+  if (exclusions.pathPatterns?.length) {
+    for (const pattern of exclusions.pathPatterns) {
+      try {
+        const regex = new RegExp(pattern, 'i');
+        if (regex.test(filePath)) {
+          return { excluded: true, reason: `Path matches pattern: ${pattern}` };
+        }
+      } catch {
+        logger.warn(`Invalid regex pattern: ${pattern}`);
       }
-    } catch {
-      logger.warn(`Invalid regex pattern: ${pattern}`);
     }
   }
 
   // Check file patterns (regex against filename only)
-  for (const pattern of exclusions.filePatterns) {
-    try {
-      const regex = new RegExp(pattern, 'i');
-      if (regex.test(fileName)) {
-        return { excluded: true, reason: `Filename matches pattern: ${pattern}` };
+  if (exclusions.filePatterns?.length) {
+    for (const pattern of exclusions.filePatterns) {
+      try {
+        const regex = new RegExp(pattern, 'i');
+        if (regex.test(fileName)) {
+          return { excluded: true, reason: `Filename matches pattern: ${pattern}` };
+        }
+      } catch {
+        logger.warn(`Invalid regex pattern: ${pattern}`);
       }
-    } catch {
-      logger.warn(`Invalid regex pattern: ${pattern}`);
     }
   }
 
@@ -130,16 +142,14 @@ interface DirectoryScanResult {
  * Build a regex to skip excluded directories during walk
  */
 function buildDirectorySkipRegex(config: Config): RegExp | undefined {
-  const { exclusions } = config;
-  if (exclusions.directories.length === 0) {
+  const directories = config.exclusions?.directories;
+  if (!directories?.length) {
     return undefined;
   }
 
   // Build regex that matches any path containing an excluded directory component
   // Escape special regex chars and join with |
-  const escaped = exclusions.directories.map((d) =>
-    d.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  );
+  const escaped = directories.map((d) => d.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 
   // Match directory name as a path component (between slashes or at end)
   // Case-insensitive matching
