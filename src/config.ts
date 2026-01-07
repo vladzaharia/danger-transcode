@@ -157,16 +157,74 @@ export async function loadConfigFromFile(filePath: string): Promise<Partial<Conf
 }
 
 /**
+ * Get default config file paths to check
+ */
+function getDefaultConfigPaths(): string[] {
+  const paths: string[] = [];
+
+  // XDG config home
+  const xdgConfig = Deno.env.get('XDG_CONFIG_HOME');
+  if (xdgConfig) {
+    paths.push(`${xdgConfig}/danger-transcode/config.json`);
+  }
+
+  // User home directory
+  const home = Deno.env.get('HOME');
+  if (home) {
+    paths.push(`${home}/.config/danger-transcode/config.json`);
+    paths.push(`${home}/.danger-transcode.json`);
+  }
+
+  // System-wide config
+  paths.push('/etc/danger-transcode/config.json');
+  paths.push('/etc/danger-transcode.json');
+
+  return paths;
+}
+
+/**
+ * Find the first existing config file from default locations
+ */
+async function findDefaultConfigFile(): Promise<string | undefined> {
+  for (const path of getDefaultConfigPaths()) {
+    try {
+      await Deno.stat(path);
+      return path;
+    } catch {
+      // File doesn't exist, try next
+    }
+  }
+  return undefined;
+}
+
+/**
  * Merge configurations with priority: file > env > defaults
+ * Throws an error if no config file is found
  */
 export async function loadConfig(configFilePath?: string): Promise<Config> {
-  let config = { ...DEFAULT_CONFIG };
-
-  // Load from file if specified
-  if (configFilePath) {
-    const fileConfig = await loadConfigFromFile(configFilePath);
-    config = { ...config, ...fileConfig };
+  // Determine which config file to use
+  let actualConfigPath = configFilePath;
+  if (!actualConfigPath) {
+    actualConfigPath = await findDefaultConfigFile();
   }
+
+  // Require a config file - don't use defaults blindly
+  if (!actualConfigPath) {
+    const searchedPaths = getDefaultConfigPaths();
+    throw new Error(
+      `No configuration file found. Create one at:\n` +
+        `  ~/.config/danger-transcode/config.json\n\n` +
+        `Or specify one with --config <path>\n\n` +
+        `Searched locations:\n${searchedPaths.map((p) => `  - ${p}`).join('\n')}\n\n` +
+        `See config.example.json for reference.`,
+    );
+  }
+
+  // Start with defaults, then overlay file config
+  let config = { ...DEFAULT_CONFIG };
+  console.log(`Loading config from: ${actualConfigPath}`);
+  const fileConfig = await loadConfigFromFile(actualConfigPath);
+  config = { ...config, ...fileConfig };
 
   // Override with environment variables
   config = loadConfigFromEnv(config);
