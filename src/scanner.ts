@@ -123,6 +123,28 @@ export function isVideoFile(filePath: string, config: Config): boolean {
 interface DirectoryScanResult {
   files: DiscoveredFile[];
   excluded: { path: string; reason: string }[];
+  skippedDirs: string[];
+}
+
+/**
+ * Build a regex to skip excluded directories during walk
+ */
+function buildDirectorySkipRegex(config: Config): RegExp | undefined {
+  const { exclusions } = config;
+  if (exclusions.directories.length === 0) {
+    return undefined;
+  }
+
+  // Build regex that matches any path containing an excluded directory component
+  // Escape special regex chars and join with |
+  const escaped = exclusions.directories.map((d) =>
+    d.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  );
+
+  // Match directory name as a path component (between slashes or at end)
+  // Case-insensitive matching
+  const pattern = `(?:^|/)(?:${escaped.join('|')})(?:/|$)`;
+  return new RegExp(pattern, 'i');
 }
 
 /**
@@ -131,18 +153,24 @@ interface DirectoryScanResult {
 async function discoverDirectory(dirPath: string, config: Config): Promise<DirectoryScanResult> {
   const files: DiscoveredFile[] = [];
   const excluded: { path: string; reason: string }[] = [];
+  const skippedDirs: string[] = [];
+
+  // Build skip regex for directories
+  const skipRegex = buildDirectorySkipRegex(config);
 
   for await (
     const entry of walk(dirPath, {
       includeDirs: false,
       followSymlinks: false,
+      // Skip entire directory trees that match exclusion patterns
+      skip: skipRegex ? [skipRegex] : undefined,
     })
   ) {
     if (!isVideoFile(entry.path, config)) {
       continue;
     }
 
-    // Check exclusion rules
+    // Check non-directory exclusion rules (pathPatterns, filePatterns, pathContains)
     const exclusionCheck = checkExclusions(entry.path, config);
     if (exclusionCheck.excluded) {
       excluded.push({ path: entry.path, reason: exclusionCheck.reason ?? 'Excluded' });
@@ -162,7 +190,7 @@ async function discoverDirectory(dirPath: string, config: Config): Promise<Direc
     }
   }
 
-  return { files, excluded };
+  return { files, excluded, skippedDirs };
 }
 
 /**
