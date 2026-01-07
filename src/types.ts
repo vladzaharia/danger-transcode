@@ -49,6 +49,7 @@ export interface MediaFile {
   codec: string;
   width: number;
   height: number;
+  size: number;
   duration?: number;
   bitrate?: number;
   needsTranscode: boolean;

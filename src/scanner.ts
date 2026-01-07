@@ -437,6 +437,7 @@ export async function analyzeFile(
       codec: probe.video.codec_name,
       width: probe.video.width,
       height: probe.video.height,
+      size: probe.fileSize,
       duration: probe.duration,
       needsTranscode,
       skipReason,

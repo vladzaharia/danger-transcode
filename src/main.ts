@@ -228,6 +228,9 @@ async function main(): Promise<void> {
       Deno.exit(0);
     }
 
+    // Sort by file size (largest first)
+    scanResult.toTranscode.sort((a, b) => b.size - a.size);
+
     // Show summary
     const typeSummary = summarizeByType(scanResult.toTranscode);
     logger.info(`Files to transcode: ${scanResult.toTranscode.length}`);
@@ -251,15 +254,22 @@ async function main(): Promise<void> {
       console.log('DRY RUN - No changes will be made');
       console.log('='.repeat(60));
 
-      // Show files to transcode first
-      console.log(`\n⚡ WILL TRANSCODE (${scanResult.toTranscode.length} files):`);
+      // Show files to transcode first (already sorted by size, largest first)
+      const totalSize = scanResult.toTranscode.reduce((sum, f) => sum + f.size, 0);
+      console.log(
+        `\n⚡ WILL TRANSCODE (${scanResult.toTranscode.length} files, ${
+          formatFileSize(totalSize)
+        } total):`,
+      );
       for (const file of scanResult.toTranscode) {
         const action =
           file.codec.toLowerCase().includes('hevc') || file.codec.toLowerCase().includes('h265')
             ? 'scale'
             : 'convert';
         console.log(
-          `  → ${file.path} [${file.codec} ${file.width}x${file.height} → HEVC ${file.targetWidth}x${file.targetHeight}, ${action}]`,
+          `  → ${
+            formatFileSize(file.size).padStart(10)
+          } | ${file.path} [${file.codec} ${file.width}x${file.height} → HEVC ${file.targetWidth}x${file.targetHeight}, ${action}]`,
         );
       }
 
