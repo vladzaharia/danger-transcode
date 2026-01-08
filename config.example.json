@@ -1,55 +1,101 @@
 {
-  "mediaDirs": ["/mnt/media", "/mnt/overflow"],
-  "tempDir": "/tmp/danger-transcode",
-  "databasePath": "/var/lib/danger-transcode/database.json",
-  "errorLogPath": "/var/lib/danger-transcode/errors.json",
-  "lockFilePath": "/tmp/danger-transcode.lock",
-  "maxConcurrency": 1,
-  "tvMaxHeight": 720,
-  "movieMaxHeight": 1080,
-  "bitrates": {
-    "low": "2M",
-    "medium": "5M",
-    "high": "15M"
-  },
-  "videoExtensions": [
-    ".mkv",
-    ".mp4",
-    ".avi",
-    ".mov",
-    ".m4v",
-    ".wmv",
-    ".flv",
-    ".webm",
-    ".ts",
-    ".m2ts",
-    ".mpg",
-    ".mpeg",
-    ".vob"
-  ],
-  "exclusions": {
-    "directories": [
-      "karaoke",
-      "singalong",
-      "samples",
-      "sample",
-      "extras",
-      "featurettes",
-      "behind the scenes",
-      "deleted scenes",
-      "interviews",
-      "trailers"
+  "$comment": "Unified configuration for danger-transcode. Supports both transcode and sync modules.",
+
+  "shared": {
+    "mediaDirs": ["/mnt/media/movies", "/mnt/media/tv"],
+    "tempDir": "/tmp/danger-transcode",
+    "maxConcurrency": 1,
+    "dryRun": false,
+    "videoExtensions": [
+      ".mkv", ".mp4", ".avi", ".mov", ".m4v", ".wmv",
+      ".flv", ".webm", ".ts", ".m2ts", ".mpg", ".mpeg", ".vob"
     ],
-    "pathPatterns": [],
-    "filePatterns": [
-      "-sample\\.",
-      "\\bsample\\b",
-      "\\btrailer\\b"
-    ],
-    "pathContains": []
+    "ffmpegPath": "ffmpeg",
+    "ffprobePath": "ffprobe"
   },
-  "ffmpegPath": "ffmpeg",
-  "ffprobePath": "ffprobe",
-  "useHardwareAccel": true,
-  "dryRun": false
+
+  "transcode": {
+    "databasePath": "/var/lib/danger-transcode/database.json",
+    "errorLogPath": "/var/lib/danger-transcode/errors.json",
+    "lockFilePath": "/tmp/danger-transcode.lock",
+    "tvMaxHeight": 720,
+    "movieMaxHeight": 1080,
+    "bitrates": {
+      "low": "2M",
+      "medium": "5M",
+      "high": "15M"
+    },
+    "exclusions": {
+      "directories": [
+        "karaoke", "singalong", "samples", "sample",
+        "extras", "featurettes", "behind the scenes",
+        "deleted scenes", "interviews", "trailers"
+      ],
+      "pathPatterns": [],
+      "filePatterns": ["-sample\\.", "\\bsample\\b", "\\btrailer\\b"],
+      "pathContains": []
+    },
+    "useHardwareAccel": true
+  },
+
+  "sync": {
+    "destinations": [
+      {
+        "path": "/mnt/portable-drive-1",
+        "label": "Travel Drive 1",
+        "reservedBytes": 1073741824,
+        "priority": 1
+      },
+      {
+        "path": "/mnt/portable-drive-2",
+        "label": "Travel Drive 2",
+        "reservedBytes": 1073741824,
+        "priority": 2
+      }
+    ],
+    "tmdbApiKey": "YOUR_TMDB_API_KEY_HERE",
+    "tmdbReadAccessToken": "",
+    "selection": {
+      "latestTvSeasons": true,
+      "popularMovies": {
+        "enabled": true,
+        "limit": 50
+      },
+      "trendingMovies": {
+        "enabled": true,
+        "timeWindow": "week",
+        "limit": 30
+      },
+      "topRatedMovies": {
+        "enabled": true,
+        "limit": 50
+      },
+      "oscarWinners": {
+        "enabled": true,
+        "years": 2
+      },
+      "franchises": [
+        {
+          "name": "Marvel Cinematic Universe",
+          "patterns": ["marvel", "avengers", "iron man", "thor", "captain america"],
+          "tmdbCollections": [131295, 131292]
+        },
+        {
+          "name": "Star Wars",
+          "patterns": ["star wars"],
+          "tmdbCollections": [10]
+        }
+      ],
+      "tmdbLists": [],
+      "tmdbCollections": []
+    },
+    "genreDistribution": {
+      "enabled": true,
+      "minPerGenre": 3
+    },
+    "syncDatabasePath": "/var/lib/danger-transcode/sync-database.json",
+    "openSubtitlesApiKey": "",
+    "downloadMissingMetadata": true
+  }
 }
+

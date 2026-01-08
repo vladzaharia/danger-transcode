@@ -1,11 +1,11 @@
 /**
  * Process manager module for danger-transcode
  * Handles singleton execution, file locking, and concurrency control
+ * Shared across all modules
  */
 
 import { dirname } from '@std/path';
 import { ensureDir } from '@std/fs';
-import type { Config } from './types.ts';
 import { getLogger } from './logger.ts';
 
 const logger = getLogger().child('process');
@@ -17,13 +17,13 @@ let lockFile: Deno.FsFile | null = null;
  * Acquire the process lock to ensure only one instance runs at a time
  * Returns true if lock acquired, false if another instance is running
  */
-export async function acquireLock(config: Config): Promise<boolean> {
+export async function acquireLock(lockFilePath: string): Promise<boolean> {
   try {
     // Ensure lock file directory exists
-    await ensureDir(dirname(config.lockFilePath));
+    await ensureDir(dirname(lockFilePath));
 
     // Try to create lock file exclusively
-    lockFile = await Deno.open(config.lockFilePath, {
+    lockFile = await Deno.open(lockFilePath, {
       write: true,
       create: true,
       truncate: true,
@@ -54,7 +54,7 @@ export async function acquireLock(config: Config): Promise<boolean> {
 /**
  * Release the process lock
  */
-export async function releaseLock(config: Config): Promise<void> {
+export async function releaseLock(lockFilePath: string): Promise<void> {
   if (lockFile) {
     try {
       await lockFile.unlock();
@@ -62,7 +62,7 @@ export async function releaseLock(config: Config): Promise<void> {
       lockFile = null;
 
       // Remove lock file
-      await Deno.remove(config.lockFilePath);
+      await Deno.remove(lockFilePath);
       logger.debug('Lock released');
     } catch (error) {
       logger.error('Failed to release lock:', error);
@@ -113,7 +113,7 @@ export class Semaphore {
 export async function runWithConcurrency<T, R>(
   items: T[],
   maxConcurrency: number,
-  task: (item: T, index: number) => Promise<R>,
+  task: (item: T, index: number) => Promise<R>
 ): Promise<R[]> {
   const semaphore = new Semaphore(maxConcurrency);
   const results: R[] = [];
@@ -136,11 +136,11 @@ export async function runWithConcurrency<T, R>(
 /**
  * Setup signal handlers for graceful shutdown
  */
-export function setupSignalHandlers(config: Config, cleanup: () => Promise<void>): void {
+export function setupSignalHandlers(lockFilePath: string, cleanup: () => Promise<void>): void {
   const handleSignal = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
     await cleanup();
-    await releaseLock(config);
+    await releaseLock(lockFilePath);
     Deno.exit(0);
   };
 
@@ -150,23 +150,28 @@ export function setupSignalHandlers(config: Config, cleanup: () => Promise<void>
 }
 
 /**
+ * Check if a command is available in PATH
+ */
+export async function checkCommand(cmd: string): Promise<boolean> {
+  try {
+    const command = new Deno.Command(cmd, { args: ['-version'], stdout: 'null', stderr: 'null' });
+    const { code } = await command.output();
+    return code === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if ffmpeg and ffprobe are available
  */
-export async function checkDependencies(
-  config: Config,
+export async function checkFFmpegDependencies(
+  ffmpegPath = 'ffmpeg',
+  ffprobePath = 'ffprobe'
 ): Promise<{ ffmpeg: boolean; ffprobe: boolean }> {
-  const checkCommand = async (cmd: string): Promise<boolean> => {
-    try {
-      const command = new Deno.Command(cmd, { args: ['-version'], stdout: 'null', stderr: 'null' });
-      const { code } = await command.output();
-      return code === 0;
-    } catch {
-      return false;
-    }
-  };
-
   return {
-    ffmpeg: await checkCommand(config.ffmpegPath),
-    ffprobe: await checkCommand(config.ffprobePath),
+    ffmpeg: await checkCommand(ffmpegPath),
+    ffprobe: await checkCommand(ffprobePath),
   };
 }
+

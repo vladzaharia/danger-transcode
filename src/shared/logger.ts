@@ -1,6 +1,7 @@
 /**
  * Logger module for danger-transcode
  * Provides consistent logging with timestamps and log levels
+ * Shared across all modules
  */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -104,6 +105,11 @@ export class Logger {
     this.level = level;
   }
 
+  /** Get the current log level */
+  getLevel(): LogLevel {
+    return this.level;
+  }
+
   /** Log a progress message (always shown, regardless of level) */
   progress(current: number, total: number, message: string): void {
     const percent = Math.round((current / total) * 100);
@@ -150,3 +156,4 @@ export function setGlobalLogger(logger: Logger): void {
 export function createLogger(options?: LoggerOptions): Logger {
   return new Logger(options);
 }
+

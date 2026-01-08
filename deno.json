@@ -4,20 +4,24 @@
   "version": "1.0.0",
   "exports": "./src/main.ts",
   "tasks": {
-    "start": "deno run --allow-read --allow-write --allow-run --allow-env src/main.ts",
-    "dev": "deno run --watch --allow-read --allow-write --allow-run --allow-env src/main.ts",
+    "start": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net src/main.ts",
+    "transcode": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net src/main.ts transcode",
+    "sync": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net src/main.ts sync",
+    "backfill": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net src/main.ts backfill",
+    "dev": "deno run --watch --allow-read --allow-write --allow-run --allow-env --allow-net src/main.ts",
     "setup": "bash scripts/setup.sh",
     "check": "deno check src/main.ts",
     "lint": "deno lint",
     "fmt": "deno fmt",
-    "test": "deno test --allow-read --allow-write --allow-run"
+    "test": "deno test --allow-read --allow-write --allow-run --allow-net"
   },
   "imports": {
     "@std/fs": "jsr:@std/fs@^1.0.0",
     "@std/path": "jsr:@std/path@^1.0.0",
     "@std/cli": "jsr:@std/cli@^1.0.0",
     "@std/async": "jsr:@std/async@^1.0.0",
-    "@std/jsonc": "jsr:@std/jsonc@^1.0.0"
+    "@std/jsonc": "jsr:@std/jsonc@^1.0.0",
+    "@cliffy/command": "https://deno.land/x/cliffy@v0.25.7/command/mod.ts"
   },
   "compilerOptions": {
     "strict": true,
