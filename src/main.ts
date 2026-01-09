@@ -1,7 +1,8 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run --allow-env
 
 /**
- * danger-transcode - Hardware-accelerated media transcoding for Rockchip devices
+ * danger-transcode - Hardware-accelerated media transcoding
+ * Supports: NVIDIA NVENC, Rockchip RKMPP, Software (libx265)
  *
  * Main entry point with CLI handling
  */
@@ -15,8 +16,12 @@ import {
   loadDatabase,
   saveDatabase,
   saveErrorLog,
+  loadAnalysisDatabase,
+  saveAnalysisDatabase,
+  getAnalysisStats,
 } from './database.ts';
-import { scanMediaDirectories, summarizeByType } from './scanner.ts';
+import type { AnalysisDatabase } from './schemas.ts';
+import { scanMediaDirectories, summarizeByType, analyzeFile } from './scanner.ts';
 import { estimateTranscodeTime, transcodeFile } from './transcoder.ts';
 import {
   acquireLock,
@@ -27,9 +32,10 @@ import {
 } from './process.ts';
 import { createLogger, type LogLevel, setGlobalLogger } from './logger.ts';
 import { formatDuration, formatFileSize } from './ffprobe.ts';
-import type { Config, MediaFile, TranscodeStats } from './types.ts';
+import type { Config, MediaFile, TranscodeStats, HardwareProfile } from './types.ts';
+import { loadTranscodeList, processTranscodeList, getFilesFromProcessedItems } from './transcode-list.ts';
 
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 
 /** CLI argument definition */
 interface CliArgs {
@@ -43,46 +49,64 @@ interface CliArgs {
   'list-errors': boolean;
   'media-dirs'?: string;
   concurrency?: number;
+  'transcode-list'?: string;
+  'hw-profile'?: string;
 }
 
 function printHelp(): void {
   console.log(`
 danger-transcode v${VERSION}
-Hardware-accelerated media transcoding for Rockchip devices
+Hardware-accelerated media transcoding (NVIDIA, Rockchip, Software)
 
 USAGE:
   deno task start [OPTIONS]
 
 OPTIONS:
-  -h, --help           Show this help message
-  -v, --version        Show version
-  -c, --config <path>  Path to configuration file
-  -n, --dry-run        Simulate transcoding without making changes
-  --verbose            Enable verbose output
-  --quiet              Suppress non-error output
-  --clear-errors       Clear error records and retry failed files
-  --list-errors        List files that failed to transcode
-  --media-dirs <dirs>  Comma-separated list of media directories
-  --concurrency <n>    Number of concurrent transcodes (default: 1)
+  -h, --help              Show this help message
+  -v, --version           Show version
+  -c, --config <path>     Path to configuration file
+  -n, --dry-run           Simulate transcoding without making changes
+  --verbose               Enable verbose output
+  --quiet                 Suppress non-error output
+  --clear-errors          Clear error records and retry failed files
+  --list-errors           List files that failed to transcode
+  --media-dirs <dirs>     Comma-separated list of media directories
+  --concurrency <n>       Number of concurrent transcodes (default: 1)
+  --transcode-list <path> Path to transcode list JSON for selective transcoding
+  --hw-profile <profile>  Hardware profile: nvidia, rockchip, software, auto
+
+HARDWARE PROFILES:
+  nvidia    - NVIDIA NVENC (requires CUDA-enabled GPU)
+  rockchip  - Rockchip RKMPP (RK3588, RK3588S, etc.)
+  software  - Software encoding with libx265
+  auto      - Auto-detect available hardware (default)
 
 ENVIRONMENT VARIABLES:
-  TRANSCODE_MEDIA_DIRS     Comma-separated list of media directories
-  TRANSCODE_TEMP_DIR       Temporary directory for transcoding
-  TRANSCODE_DB_PATH        Path to database file
-  TRANSCODE_CONCURRENCY    Number of concurrent transcodes
-  TRANSCODE_TV_MAX_HEIGHT  Max height for TV shows (default: 720)
+  TRANSCODE_MEDIA_DIRS       Comma-separated list of media directories
+  TRANSCODE_TEMP_DIR         Temporary directory for transcoding
+  TRANSCODE_DB_PATH          Path to database file
+  TRANSCODE_ANALYSIS_PATH    Path to analysis cache file (ffprobe results)
+  TRANSCODE_ERROR_PATH       Path to error log file
+  TRANSCODE_LOCK_PATH        Path to lock file for singleton execution
+  TRANSCODE_CONCURRENCY      Number of concurrent transcodes
+  TRANSCODE_TV_MAX_HEIGHT    Max height for TV shows (default: 720)
   TRANSCODE_MOVIE_MAX_HEIGHT Max height for movies (default: 1080)
-  FFMPEG_PATH              Path to ffmpeg binary
-  FFPROBE_PATH             Path to ffprobe binary
-  TRANSCODE_HW_ACCEL       Enable hardware acceleration (default: true)
-  TRANSCODE_DRY_RUN        Enable dry run mode
+  TRANSCODE_HW_PROFILE       Hardware profile (nvidia, rockchip, software, auto)
+  TRANSCODE_LIST_PATH        Path to transcode list JSON
+  FFMPEG_PATH                Path to ffmpeg binary
+  FFPROBE_PATH               Path to ffprobe binary
+  TRANSCODE_HW_ACCEL         Enable hardware acceleration (default: true)
+  TRANSCODE_DRY_RUN          Enable dry run mode
 
 EXAMPLES:
-  # Run with default settings
+  # Run with default settings (auto-detect hardware)
   deno task start
 
-  # Scan specific directories
-  deno task start --media-dirs /mnt/media,/mnt/overflow
+  # Use NVIDIA GPU for transcoding
+  deno task start --hw-profile nvidia
+
+  # Transcode specific media using a list file
+  deno task start --transcode-list my-list.json
 
   # Dry run to see what would be transcoded
   deno task start --dry-run --verbose
@@ -100,7 +124,7 @@ async function main(): Promise<void> {
   // Parse CLI arguments
   const args = parseArgs(Deno.args, {
     boolean: ['help', 'version', 'dry-run', 'verbose', 'quiet', 'clear-errors', 'list-errors'],
-    string: ['config', 'media-dirs'],
+    string: ['config', 'media-dirs', 'transcode-list', 'hw-profile'],
     alias: { h: 'help', v: 'version', c: 'config', n: 'dry-run' },
     default: { help: false, version: false, 'dry-run': false, verbose: false, quiet: false },
   }) as unknown as CliArgs;
@@ -129,13 +153,26 @@ async function main(): Promise<void> {
 
     // CLI overrides
     if (args['media-dirs']) {
-      config.mediaDirs = args['media-dirs'].split(',').map((d) => d.trim());
+      config.mediaDirs = args['media-dirs'].split(',').map((d: string) => d.trim());
     }
     if (args.concurrency !== undefined) {
       config.maxConcurrency = args.concurrency;
     }
     if (args['dry-run']) {
       config.dryRun = true;
+    }
+    if (args['transcode-list']) {
+      config.transcodeListPath = args['transcode-list'];
+    }
+    if (args['hw-profile']) {
+      const profile = args['hw-profile'].toLowerCase();
+      if (['nvidia', 'rockchip', 'software', 'auto'].includes(profile)) {
+        config.hardwareProfile = profile as HardwareProfile;
+      } else {
+        logger.error(`Invalid hardware profile: ${args['hw-profile']}`);
+        logger.error('Valid profiles: nvidia, rockchip, software, auto');
+        Deno.exit(1);
+      }
     }
 
     // Validate config
@@ -181,8 +218,9 @@ async function main(): Promise<void> {
   setupSignalHandlers(config, cleanup);
 
   try {
-    // Load database
+    // Load databases
     const db = await loadDatabase(config);
+    const analysisDb: AnalysisDatabase = await loadAnalysisDatabase(config);
 
     // Handle special commands
     if (args['list-errors']) {
@@ -212,15 +250,89 @@ async function main(): Promise<void> {
 
     // Show current stats
     const stats = getDatabaseStats(db);
+    const analysisStats = getAnalysisStats(analysisDb);
     logger.info(
       `Database: ${stats.totalRecords} transcoded, ${stats.totalErrors} errors, ${
         formatFileSize(stats.totalSpaceSaved)
       } saved`,
     );
+    logger.info(`Analysis cache: ${analysisStats.totalRecords} files cached`);
 
-    // Scan media directories
-    logger.info('Scanning media directories...');
-    const scanResult = await scanMediaDirectories(config, db);
+    // Determine mode: transcode list or full scan
+    let scanResult: { toTranscode: MediaFile[]; skipped: Array<{ path: string; reason: string }>; excluded: Array<{ path: string; reason: string }> };
+
+    if (config.transcodeListPath) {
+      // Transcode list mode - selective transcoding
+      logger.info(`Using transcode list: ${config.transcodeListPath}`);
+      const list = await loadTranscodeList(config.transcodeListPath);
+      const processedItems = await processTranscodeList(list, config);
+      const fileMap = await getFilesFromProcessedItems(processedItems, config);
+
+      logger.info(`Transcode list matched ${fileMap.size} files`);
+
+      // Analyze each file and apply profile overrides
+      const toTranscode: MediaFile[] = [];
+      const skipped: Array<{ path: string; reason: string }> = [];
+      let analyzed = 0;
+
+      for (const [filePath, item] of fileMap) {
+        // Check if already transcoded
+        if (db.records[filePath]) {
+          logger.debug(`Skipping already transcoded: ${filePath}`);
+          skipped.push({ path: filePath, reason: 'Already transcoded' });
+          continue;
+        }
+        // Check if in error list
+        if (db.errors[filePath]) {
+          logger.debug(`Skipping errored file: ${filePath}`);
+          skipped.push({ path: filePath, reason: 'Previous error' });
+          continue;
+        }
+
+        // Build overrides from processed item
+        const overrides = {
+          maxHeight: item.overrides.maxHeight,
+          bitrate: item.overrides.bitrate,
+          inPlace: item.overrides.inPlace,
+          outputDir: item.overrides.outputDir,
+          profileName: item.profileName,
+        };
+
+        // Analyze file with profile overrides (uses cache)
+        analyzed++;
+        if (analyzed % 10 === 0) {
+          logger.info(`Analyzing files... ${analyzed}/${fileMap.size}`);
+        }
+
+        const result = await analyzeFile(filePath, config, { overrides, analysisDb });
+
+        if (result.error) {
+          logger.warn(`Failed to analyze ${filePath}: ${result.error}`);
+          continue;
+        }
+
+        if (result.skipped && result.skipReason) {
+          skipped.push({ path: filePath, reason: result.skipReason });
+          continue;
+        }
+
+        if (result.file && result.file.needsTranscode) {
+          toTranscode.push(result.file);
+        }
+      }
+
+      // Save analysis cache after transcode list processing
+      await saveAnalysisDatabase(config, analysisDb);
+
+      scanResult = { toTranscode, skipped, excluded: [] };
+    } else {
+      // Full scan mode - scan all media directories
+      logger.info('Scanning media directories...');
+      scanResult = await scanMediaDirectories(config, db, analysisDb);
+
+      // Save analysis cache after scan
+      await saveAnalysisDatabase(config, analysisDb);
+    }
 
     if (scanResult.toTranscode.length === 0) {
       logger.info('No files need transcoding');

@@ -1,6 +1,27 @@
 /**
  * Types and interfaces for the danger-transcode system
+ *
+ * Note: Runtime-validated types are in schemas.ts using Zod.
+ * This file contains additional interfaces not covered by Zod schemas.
  */
+
+// Re-export Zod-inferred types for convenience
+export type {
+  HardwareProfile,
+  BitrateConfig,
+  NvidiaEncoderSettings,
+  RockchipEncoderSettings,
+  SoftwareEncoderSettings,
+  OutputConfig,
+  OutputMode,
+  ExclusionRules,
+  ProfileSettings,
+  MediaQuery,
+  TranscodeList,
+  ResolvedTranscodeItem,
+  Config,
+  LibraryType,
+} from './schemas.ts';
 
 /** Media type classification */
 export type MediaType = 'tv' | 'movie' | 'other';
@@ -43,6 +64,16 @@ export interface FFProbeOutput {
 }
 
 /** Media file with analysis information */
+/** Per-file transcode overrides from transcode list profiles */
+export interface TranscodeOverrides {
+  maxHeight?: number;
+  bitrate?: string;
+  inPlace?: boolean;
+  outputDir?: string;
+  profileName?: string;
+}
+
+/** Media file with analysis information */
 export interface MediaFile {
   path: string;
   type: MediaType;
@@ -56,6 +87,8 @@ export interface MediaFile {
   skipReason?: string;
   targetWidth?: number;
   targetHeight?: number;
+  /** Optional overrides from transcode list profile */
+  overrides?: TranscodeOverrides;
 }
 
 /** Record of a transcoded file stored in the database */
@@ -90,62 +123,6 @@ export interface TranscodeDatabase {
   errors: Record<string, ErrorRecord>;
 }
 
-/** Bitrate configuration */
-export interface BitrateConfig {
-  /** Bitrate for 720p and below (e.g., "2M") */
-  low: string;
-  /** Bitrate for 1080p (e.g., "5M") */
-  medium: string;
-  /** Bitrate for 4K and above (e.g., "15M") */
-  high: string;
-}
-
-/** Exclusion rules configuration (all fields optional) */
-export interface ExclusionRules {
-  /** Directory names to exclude (case-insensitive, matches any path component) */
-  directories?: string[];
-  /** Patterns to match against full path (regex strings) */
-  pathPatterns?: string[];
-  /** Patterns to match against filename only (regex strings) */
-  filePatterns?: string[];
-  /** Literal strings that if found in path, exclude the file */
-  pathContains?: string[];
-}
-
-/** Main configuration */
-export interface Config {
-  /** Directories to scan for media files */
-  mediaDirs: string[];
-  /** Temporary directory for transcoding */
-  tempDir: string;
-  /** Path to the transcoding database file */
-  databasePath: string;
-  /** Path to the error log file */
-  errorLogPath: string;
-  /** Lock file path for singleton execution */
-  lockFilePath: string;
-  /** Maximum concurrent transcodes */
-  maxConcurrency: number;
-  /** Maximum height for TV shows (720p = 720) */
-  tvMaxHeight: number;
-  /** Maximum height for movies (1080p = 1080) */
-  movieMaxHeight: number;
-  /** Bitrate settings */
-  bitrates: BitrateConfig;
-  /** Video file extensions to process */
-  videoExtensions: string[];
-  /** Exclusion rules for skipping files (optional) */
-  exclusions?: ExclusionRules;
-  /** FFmpeg binary path (default: 'ffmpeg') */
-  ffmpegPath: string;
-  /** FFprobe binary path (default: 'ffprobe') */
-  ffprobePath: string;
-  /** Whether to use hardware acceleration */
-  useHardwareAccel: boolean;
-  /** Dry run mode - don't actually transcode */
-  dryRun: boolean;
-}
-
 /** Transcoding job */
 export interface TranscodeJob {
   file: MediaFile;
@@ -164,4 +141,78 @@ export interface TranscodeStats {
   failed: number;
   spaceSaved: number;
   totalDuration: number;
+}
+
+//═══════════════════════════════════════════════════════════════════════════════
+// ENCODER PROFILE TYPES
+//═══════════════════════════════════════════════════════════════════════════════
+
+/** FFmpeg arguments for hardware acceleration input */
+export interface HWAccelInputArgs {
+  hwaccel?: string;
+  hwaccelOutputFormat?: string;
+  extraInputArgs?: string[];
+}
+
+/** FFmpeg arguments for video encoding */
+export interface EncoderArgs {
+  encoder: string;
+  bitrateArgs: string[];
+  qualityArgs: string[];
+  extraEncoderArgs?: string[];
+}
+
+/** FFmpeg arguments for scaling filter */
+export interface ScalerArgs {
+  filter: string;
+  width: number;
+  height: number;
+}
+
+/** Complete encoding profile for a specific hardware type */
+export interface EncodingProfile {
+  name: string;
+  hwAccelInput: HWAccelInputArgs;
+  encoder: EncoderArgs;
+  getScaler: (width: number, height: number) => ScalerArgs | null;
+}
+
+//═══════════════════════════════════════════════════════════════════════════════
+// MEDIA MATCHING TYPES
+//═══════════════════════════════════════════════════════════════════════════════
+
+/** Media entry for fuzzy matching index */
+export interface MediaEntry {
+  /** Clean name for searching */
+  name: string;
+  /** Original folder/file name */
+  originalName: string;
+  /** Full path to the media */
+  path: string;
+  /** Library type */
+  library: 'tv' | 'movie';
+  /** Year extracted from name (if present) */
+  year?: number;
+  /** Available seasons (TV only) */
+  seasons?: number[];
+}
+
+/** Result of a media match */
+export interface MatchResult {
+  entry: MediaEntry;
+  score: number;
+  matchedQuery: string;
+}
+
+/** Processed transcode item with matched files */
+export interface ProcessedTranscodeItem {
+  originalQuery: string;
+  profileName: string;
+  matches: MatchResult[];
+  overrides: {
+    inPlace?: boolean;
+    outputDir?: string;
+    maxHeight?: number;
+    bitrate?: string;
+  };
 }

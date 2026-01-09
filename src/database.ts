@@ -1,16 +1,18 @@
 /**
  * Database module for danger-transcode
- * JSON-based tracking of transcoded files
+ * JSON-based tracking of transcoded files and analysis cache
  */
 
 import { dirname } from '@std/path';
 import { ensureDir } from '@std/fs';
 import type { Config, ErrorRecord, TranscodeDatabase, TranscodeRecord } from './types.ts';
+import type { AnalysisDatabase, AnalysisRecord } from './schemas.ts';
 import { getLogger } from './logger.ts';
 
 const logger = getLogger().child('database');
 
 const DATABASE_VERSION = 1;
+const ANALYSIS_VERSION = 1;
 
 /**
  * Create an empty database structure
@@ -182,4 +184,152 @@ export function clearErrors(db: TranscodeDatabase): number {
   const count = Object.keys(db.errors).length;
   db.errors = {};
   return count;
+}
+
+//═══════════════════════════════════════════════════════════════════════════════
+// ANALYSIS DATABASE - Cache for ffprobe results
+//═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Create an empty analysis database structure
+ */
+function createEmptyAnalysisDatabase(): AnalysisDatabase {
+  return {
+    version: ANALYSIS_VERSION,
+    lastUpdated: new Date().toISOString(),
+    records: {},
+  };
+}
+
+/**
+ * Load the analysis database from disk
+ */
+export async function loadAnalysisDatabase(config: Config): Promise<AnalysisDatabase> {
+  try {
+    const content = await Deno.readTextFile(config.analysisPath);
+    const db = JSON.parse(content) as AnalysisDatabase;
+
+    // Migrate if needed
+    if (db.version !== ANALYSIS_VERSION) {
+      logger.warn(`Analysis database version mismatch (${db.version} vs ${ANALYSIS_VERSION}), recreating...`);
+      return createEmptyAnalysisDatabase();
+    }
+
+    logger.info(`Loaded analysis cache with ${Object.keys(db.records).length} records`);
+    return db;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      logger.info('No existing analysis cache found, creating new one');
+      return createEmptyAnalysisDatabase();
+    }
+    throw error;
+  }
+}
+
+/**
+ * Save the analysis database to disk
+ */
+export async function saveAnalysisDatabase(config: Config, db: AnalysisDatabase): Promise<void> {
+  // Ensure directory exists
+  await ensureDir(dirname(config.analysisPath));
+
+  db.lastUpdated = new Date().toISOString();
+
+  const content = JSON.stringify(db, null, 2);
+  await Deno.writeTextFile(config.analysisPath, content);
+
+  logger.debug(`Saved analysis cache with ${Object.keys(db.records).length} records`);
+}
+
+/**
+ * Compute a quick "hash" for cache validation based on file size and mtime
+ * Returns { size, mtime } tuple that can be compared
+ */
+export async function getFileIdentifier(filePath: string): Promise<{ size: number; mtime: string } | null> {
+  try {
+    const stat = await Deno.stat(filePath);
+    return {
+      size: stat.size,
+      mtime: stat.mtime?.toISOString() ?? new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if a cached analysis is still valid
+ * Compares file size and mtime to detect changes
+ */
+export function isAnalysisCacheValid(
+  record: AnalysisRecord,
+  currentSize: number,
+  currentMtime: string,
+): boolean {
+  return record.fileSize === currentSize && record.fileMtime === currentMtime;
+}
+
+/**
+ * Get cached analysis for a file if valid
+ * Returns null if not cached or cache is stale
+ */
+export async function getCachedAnalysis(
+  db: AnalysisDatabase,
+  filePath: string,
+): Promise<AnalysisRecord | null> {
+  const record = db.records[filePath];
+  if (!record) {
+    return null;
+  }
+
+  // Check if file has changed
+  const fileId = await getFileIdentifier(filePath);
+  if (!fileId) {
+    return null;
+  }
+
+  if (isAnalysisCacheValid(record, fileId.size, fileId.mtime)) {
+    return record;
+  }
+
+  // Cache is stale
+  logger.debug(`Analysis cache stale for: ${filePath}`);
+  return null;
+}
+
+/**
+ * Add or update an analysis record in the cache
+ */
+export function setAnalysisRecord(
+  db: AnalysisDatabase,
+  record: AnalysisRecord,
+): void {
+  db.records[record.path] = record;
+}
+
+/**
+ * Remove an analysis record (e.g., when file is deleted)
+ */
+export function removeAnalysisRecord(
+  db: AnalysisDatabase,
+  filePath: string,
+): boolean {
+  if (filePath in db.records) {
+    delete db.records[filePath];
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get statistics from the analysis database
+ */
+export function getAnalysisStats(db: AnalysisDatabase): {
+  totalRecords: number;
+  lastUpdated: string;
+} {
+  return {
+    totalRecords: Object.keys(db.records).length,
+    lastUpdated: db.lastUpdated,
+  };
 }

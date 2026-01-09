@@ -7,9 +7,16 @@
 
 import { walk } from '@std/fs';
 import { basename, dirname, extname } from '@std/path';
-import type { Config, MediaFile, MediaType, TranscodeDatabase } from './types.ts';
-import { isHEVC, probeMediaFile } from './ffprobe.ts';
-import { getFileErrors, isFileTranscoded } from './database.ts';
+import type { Config, MediaFile, MediaType, TranscodeDatabase, TranscodeOverrides } from './types.ts';
+import type { AnalysisDatabase, AnalysisRecord } from './schemas.ts';
+import { isHEVC, probeMediaFile, type ProbeResult } from './ffprobe.ts';
+import {
+  getFileErrors,
+  isFileTranscoded,
+  getCachedAnalysis,
+  setAnalysisRecord,
+  getFileIdentifier,
+} from './database.ts';
 import { getLogger } from './logger.ts';
 
 const logger = getLogger().child('scanner');
@@ -296,25 +303,32 @@ export function classifyMediaType(filePath: string): MediaType {
 /**
  * Calculate target resolution based on media type and config
  * Returns null if no scaling is needed
+ * @param maxHeightOverride - Optional override from transcode list profile
  */
 export function calculateTargetResolution(
   width: number,
   height: number,
   mediaType: MediaType,
   config: Config,
+  maxHeightOverride?: number,
 ): { width: number; height: number } | null {
   let maxHeight: number;
 
-  switch (mediaType) {
-    case 'tv':
-      maxHeight = config.tvMaxHeight;
-      break;
-    case 'movie':
-      maxHeight = config.movieMaxHeight;
-      break;
-    case 'other':
-      // Keep original resolution for other content
-      return null;
+  if (maxHeightOverride !== undefined) {
+    // Use profile override
+    maxHeight = maxHeightOverride;
+  } else {
+    switch (mediaType) {
+      case 'tv':
+        maxHeight = config.tvMaxHeight;
+        break;
+      case 'movie':
+        maxHeight = config.movieMaxHeight;
+        break;
+      case 'other':
+        // Keep original resolution for other content
+        return null;
+    }
   }
 
   // Don't upscale
@@ -382,15 +396,101 @@ export function filterByDatabaseState(
 }
 
 /**
+ * Convert a cached AnalysisRecord back to ProbeResult format
+ */
+function analysisRecordToProbeResult(record: AnalysisRecord): ProbeResult {
+  return {
+    path: record.path,
+    video: record.video
+      ? {
+          codec_name: record.video.codec_name,
+          width: record.video.width,
+          height: record.video.height,
+          bit_rate: record.video.bit_rate,
+        }
+      : null,
+    hasAudio: record.hasAudio,
+    hasSubtitles: record.hasSubtitles,
+    duration: record.duration,
+    fileSize: record.fileSize,
+    formatName: record.formatName,
+  };
+}
+
+/**
+ * Convert a ProbeResult to AnalysisRecord for caching
+ */
+async function probeResultToAnalysisRecord(
+  probe: ProbeResult,
+  filePath: string,
+): Promise<AnalysisRecord | null> {
+  const fileId = await getFileIdentifier(filePath);
+  if (!fileId) return null;
+
+  return {
+    path: filePath,
+    fileSize: fileId.size,
+    fileMtime: fileId.mtime,
+    analyzedAt: new Date().toISOString(),
+    video: probe.video
+      ? {
+          codec_name: probe.video.codec_name,
+          width: probe.video.width,
+          height: probe.video.height,
+          bit_rate: probe.video.bit_rate,
+        }
+      : null,
+    hasAudio: probe.hasAudio,
+    hasSubtitles: probe.hasSubtitles,
+    duration: probe.duration,
+    formatName: probe.formatName,
+  };
+}
+
+/** Options for analyzeFile function */
+export interface AnalyzeFileOptions {
+  /** Optional overrides from transcode list profile */
+  overrides?: TranscodeOverrides;
+  /** Optional analysis database for caching */
+  analysisDb?: AnalysisDatabase;
+}
+
+/**
  * Analyze a single file to determine if it needs transcoding
- * This is the expensive operation - calls ffprobe
+ * Uses cached analysis if available and valid, otherwise calls ffprobe
  */
 export async function analyzeFile(
   filePath: string,
   config: Config,
+  options?: AnalyzeFileOptions,
 ): Promise<AnalysisResult> {
+  const { overrides, analysisDb } = options ?? {};
+
   try {
-    const probe = await probeMediaFile(config, filePath);
+    let probe: ProbeResult;
+    let cacheHit = false;
+
+    // Try to get cached analysis
+    if (analysisDb) {
+      const cached = await getCachedAnalysis(analysisDb, filePath);
+      if (cached) {
+        probe = analysisRecordToProbeResult(cached);
+        cacheHit = true;
+        logger.debug(`Analysis cache hit: ${filePath}`);
+      } else {
+        // Cache miss - run ffprobe
+        probe = await probeMediaFile(config, filePath);
+
+        // Store in cache
+        const record = await probeResultToAnalysisRecord(probe, filePath);
+        if (record) {
+          setAnalysisRecord(analysisDb, record);
+        }
+      }
+    } else {
+      // No cache - just run ffprobe
+      probe = await probeMediaFile(config, filePath);
+    }
 
     if (!probe.video) {
       return {
@@ -404,11 +504,13 @@ export async function analyzeFile(
     const isAlreadyHEVC = isHEVC(probe.video.codec_name);
 
     // Calculate target resolution (null if no scaling needed)
+    // Use override maxHeight if provided from transcode list profile
     const target = calculateTargetResolution(
       probe.video.width,
       probe.video.height,
       mediaType,
       config,
+      overrides?.maxHeight,
     );
     const needsScaling = target !== null;
 
@@ -443,6 +545,7 @@ export async function analyzeFile(
       skipReason,
       targetWidth: target?.width ?? probe.video.width,
       targetHeight: target?.height ?? probe.video.height,
+      overrides, // Attach overrides for use during transcoding
     };
 
     return {
@@ -463,11 +566,13 @@ export async function analyzeFile(
 
 /**
  * Analyze multiple files with progress callback
+ * @param analysisDb - Optional analysis database for caching ffprobe results
  */
 export async function analyzeFiles(
   files: DiscoveredFile[],
   config: Config,
   onProgress?: (current: number, total: number, path: string) => void,
+  analysisDb?: AnalysisDatabase,
 ): Promise<AnalysisSummary> {
   const summary: AnalysisSummary = {
     totalAnalyzed: 0,
@@ -480,7 +585,7 @@ export async function analyzeFiles(
     const file = files[i];
     onProgress?.(i + 1, files.length, file.path);
 
-    const result = await analyzeFile(file.path, config);
+    const result = await analyzeFile(file.path, config, { analysisDb });
     summary.totalAnalyzed++;
 
     if (result.error) {
@@ -528,10 +633,12 @@ export interface ScanResult {
 /**
  * Scan all configured media directories for files to transcode
  * Combines discovery and analysis phases
+ * @param analysisDb - Optional analysis database for caching ffprobe results
  */
 export async function scanMediaDirectories(
   config: Config,
   db: TranscodeDatabase,
+  analysisDb?: AnalysisDatabase,
 ): Promise<ScanResult> {
   // Phase 1: Discovery
   logger.info('Phase 1: Discovering video files...');
@@ -547,11 +654,16 @@ export async function scanMediaDirectories(
   logger.info(`  Too many errors: ${tooManyErrors.length}`);
   logger.info(`  To analyze: ${toAnalyze.length}`);
 
-  // Phase 2: Analysis
+  // Phase 2: Analysis (uses cache if available)
   logger.info('Phase 2: Analyzing files...');
-  const analysis = await analyzeFiles(toAnalyze, config, (current, total, path) => {
-    logger.progress(current, total, `Analyzing: ${basename(path)}`);
-  });
+  const analysis = await analyzeFiles(
+    toAnalyze,
+    config,
+    (current, total, path) => {
+      logger.progress(current, total, `Analyzing: ${basename(path)}`);
+    },
+    analysisDb,
+  );
   logger.progressEnd();
 
   // Combine results

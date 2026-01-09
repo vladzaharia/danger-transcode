@@ -1,13 +1,15 @@
 /**
  * Transcoder module for danger-transcode
- * Builds and executes FFmpeg commands with Rockchip hardware acceleration
+ * Builds and executes FFmpeg commands with hardware acceleration support
+ * Supports: NVIDIA NVENC, Rockchip RKMPP, Software (libx265)
  */
 
-import { basename, join } from '@std/path';
+import { basename, dirname, join } from '@std/path';
 import { ensureDir } from '@std/fs';
-import type { Config, MediaFile, TranscodeRecord } from './types.ts';
+import type { Config, MediaFile, TranscodeRecord, EncodingProfile, OutputConfig } from './types.ts';
 import { getLogger } from './logger.ts';
 import { formatDuration, formatFileSize } from './ffprobe.ts';
+import { createEncodingProfile, buildFFmpegArgsFromProfile } from './encoder.ts';
 
 const logger = getLogger().child('transcoder');
 
@@ -16,103 +18,67 @@ export interface TranscodeResult {
   success: boolean;
   record?: TranscodeRecord;
   error?: string;
+  outputPath?: string;
 }
 
+/** Cached encoding profile for files without overrides */
+let cachedProfile: EncodingProfile | null = null;
+let cachedProfileHeight: number | null = null;
+let cachedProfileBitrate: string | undefined = undefined;
+
 /**
- * Get appropriate bitrate for the target resolution
+ * Get or create encoding profile (cached for performance)
+ * Cache is invalidated if height or bitrate override changes
  */
-function getBitrate(height: number, config: Config): string {
-  if (height <= 720) {
-    return config.bitrates.low;
-  } else if (height <= 1080) {
-    return config.bitrates.medium;
+async function getEncodingProfile(
+  config: Config,
+  targetHeight: number,
+  bitrateOverride?: string,
+): Promise<EncodingProfile> {
+  // Cache profile if height and bitrate haven't changed
+  if (
+    cachedProfile &&
+    cachedProfileHeight === targetHeight &&
+    cachedProfileBitrate === bitrateOverride
+  ) {
+    return cachedProfile;
   }
-  return config.bitrates.high;
+
+  cachedProfile = await createEncodingProfile(config, targetHeight, bitrateOverride);
+  cachedProfileHeight = targetHeight;
+  cachedProfileBitrate = bitrateOverride;
+
+  const bitrateInfo = bitrateOverride ? ` (bitrate: ${bitrateOverride})` : '';
+  logger.info(`Using ${cachedProfile.name} encoder profile${bitrateInfo}`);
+  return cachedProfile;
 }
 
 /**
- * Get max bitrate (typically 1.5x the target bitrate for VBR)
+ * Build FFmpeg command arguments using the encoder profile system
+ * Uses per-file overrides from transcode list profiles when available
  */
-function getMaxBitrate(bitrate: string): string {
-  const match = bitrate.match(/^(\d+(?:\.\d+)?)\s*([KMG])?/i);
-  if (!match) return bitrate;
-
-  const value = parseFloat(match[1]) * 1.5;
-  const unit = match[2] || '';
-  return `${value}${unit}`;
-}
-
-/**
- * Build FFmpeg command arguments for hardware-accelerated transcoding
- */
-export function buildFFmpegArgs(
+export async function buildFFmpegArgs(
   inputPath: string,
   outputPath: string,
   file: MediaFile,
   config: Config,
-): string[] {
-  const args: string[] = [];
+): Promise<string[]> {
+  const targetHeight = file.targetHeight ?? file.height;
+  const bitrateOverride = file.overrides?.bitrate;
+  const profile = await getEncodingProfile(config, targetHeight, bitrateOverride);
 
-  // Hardware acceleration input options (Rockchip MPP)
-  if (config.useHardwareAccel) {
-    args.push('-hwaccel', 'rkmpp');
-    args.push('-hwaccel_output_format', 'drm_prime');
-    args.push('-afbc', 'rga');
-  }
-
-  // Input file
-  args.push('-i', inputPath);
-
-  // Video encoding
-  const bitrate = getBitrate(file.targetHeight ?? file.height, config);
-  const maxBitrate = getMaxBitrate(bitrate);
-
-  // Video filter for scaling (if needed)
+  // Determine if scaling is needed
   const needsScale = file.targetWidth !== file.width || file.targetHeight !== file.height;
+  const targetWidth = needsScale ? file.targetWidth ?? null : null;
+  const targetHeightForScale = needsScale ? file.targetHeight ?? null : null;
 
-  if (config.useHardwareAccel) {
-    // Hardware-accelerated encoder
-    args.push('-c:v', 'hevc_rkmpp');
-
-    if (needsScale) {
-      // Use hardware scaler
-      args.push(
-        '-vf',
-        `scale_rkrga=w=${file.targetWidth}:h=${file.targetHeight}:format=nv12:afbc=1`,
-      );
-    }
-
-    // Encoder settings
-    args.push('-rc_mode', 'VBR');
-    args.push('-b:v', bitrate);
-    args.push('-maxrate', maxBitrate);
-  } else {
-    // Software fallback (libx265)
-    args.push('-c:v', 'libx265');
-    args.push('-preset', 'medium');
-    args.push('-crf', '23');
-
-    if (needsScale) {
-      args.push('-vf', `scale=${file.targetWidth}:${file.targetHeight}`);
-    }
-  }
-
-  // Audio: copy if possible
-  args.push('-c:a', 'copy');
-
-  // Subtitles: copy
-  args.push('-c:s', 'copy');
-
-  // Map all streams
-  args.push('-map', '0');
-
-  // Overwrite output
-  args.push('-y');
-
-  // Output file
-  args.push(outputPath);
-
-  return args;
+  return buildFFmpegArgsFromProfile(
+    profile,
+    inputPath,
+    outputPath,
+    targetWidth,
+    targetHeightForScale,
+  );
 }
 
 /**
@@ -125,6 +91,69 @@ export function getTempOutputPath(config: Config, inputPath: string): string {
 }
 
 /**
+ * Determine if we should replace the original file or output to a separate location
+ * Priority: file overrides > config output settings > default (in-place)
+ */
+function shouldOutputInPlace(file: MediaFile, config: Config): boolean {
+  // Per-file override from transcode list takes priority
+  if (file.overrides?.inPlace !== undefined) {
+    return file.overrides.inPlace;
+  }
+  // Use config output mode
+  return config.output?.mode !== 'separate';
+}
+
+/**
+ * Get the final output path for a transcoded file
+ * For separate mode: constructs path in output directory
+ * For in-place mode: same as input path (will replace original)
+ */
+async function getFinalOutputPath(
+  file: MediaFile,
+  config: Config,
+): Promise<string> {
+  const inPlace = shouldOutputInPlace(file, config);
+
+  if (inPlace) {
+    return file.path;
+  }
+
+  // Get output directory from override or config
+  const outputDir = file.overrides?.outputDir ?? config.output?.directory;
+  if (!outputDir) {
+    logger.warn('Separate output mode but no output directory specified, using in-place');
+    return file.path;
+  }
+
+  // Determine output path
+  let finalOutputPath: string;
+
+  if (config.output?.preserveStructure) {
+    // Find which media dir this file is under
+    const mediaDir = config.mediaDirs.find((dir) => file.path.startsWith(dir));
+    if (mediaDir) {
+      // Preserve structure relative to media dir
+      const relativePath = file.path.slice(mediaDir.length);
+      finalOutputPath = join(outputDir, relativePath);
+    } else {
+      // File not under any media dir, just use filename
+      finalOutputPath = join(outputDir, basename(file.path));
+    }
+  } else {
+    // Flat output - just filename in output dir
+    finalOutputPath = join(outputDir, basename(file.path));
+  }
+
+  // Change extension to mkv
+  finalOutputPath = finalOutputPath.replace(/\.[^.]+$/, '.mkv');
+
+  // Ensure output directory exists
+  await ensureDir(dirname(finalOutputPath));
+
+  return finalOutputPath;
+}
+
+/**
  * Transcode a single media file
  */
 export async function transcodeFile(
@@ -132,10 +161,16 @@ export async function transcodeFile(
   config: Config,
 ): Promise<TranscodeResult> {
   const startTime = Date.now();
-  logger.info(`Starting transcode: ${file.path}`);
+  const inPlace = shouldOutputInPlace(file, config);
+  const profileInfo = file.overrides?.profileName ? ` [${file.overrides.profileName}]` : '';
+
+  logger.info(`Starting transcode: ${file.path}${profileInfo}`);
   logger.info(
     `  ${file.codec} ${file.width}x${file.height} -> HEVC ${file.targetWidth}x${file.targetHeight}`,
   );
+  if (file.overrides?.bitrate) {
+    logger.info(`  Bitrate override: ${file.overrides.bitrate}`);
+  }
 
   // Ensure temp directory exists
   await ensureDir(config.tempDir);
@@ -144,7 +179,7 @@ export async function transcodeFile(
   const tempOutputPath = getTempOutputPath(config, file.path);
 
   // Build FFmpeg command
-  const args = buildFFmpegArgs(file.path, tempOutputPath, file, config);
+  const args = await buildFFmpegArgs(file.path, tempOutputPath, file, config);
 
   logger.debug(`FFmpeg command: ${config.ffmpegPath} ${args.join(' ')}`);
 
@@ -184,8 +219,12 @@ export async function transcodeFile(
       } (${sizeReduction}% ${sizeReduction >= 0 ? 'reduction' : 'increase'})`,
     );
 
-    // Only replace if the new file is smaller
-    if (newStat.size >= originalStat.size) {
+    // Determine final output path
+    const finalOutputPath = await getFinalOutputPath(file, config);
+
+    // For in-place mode, only replace if smaller
+    // For separate mode, always output (user explicitly wants separate copies)
+    if (inPlace && newStat.size >= originalStat.size) {
       logger.warn(
         `Skipping replacement: transcoded file is not smaller (${formatFileSize(newStat.size)} >= ${
           formatFileSize(originalStat.size)
@@ -212,8 +251,16 @@ export async function transcodeFile(
       };
     }
 
-    // Replace original file with transcoded version
-    await replaceOriginalFile(file.path, tempOutputPath);
+    // Move transcoded file to final location
+    if (inPlace) {
+      // Replace original file with transcoded version
+      await replaceOriginalFile(file.path, tempOutputPath);
+      logger.info(`  Replaced original file`);
+    } else {
+      // Move to separate output location
+      await moveFile(tempOutputPath, finalOutputPath);
+      logger.info(`  Output: ${finalOutputPath}`);
+    }
 
     // Create transcode record
     const record: TranscodeRecord = {
@@ -230,7 +277,7 @@ export async function transcodeFile(
       success: true,
     };
 
-    return { success: true, record };
+    return { success: true, record, outputPath: inPlace ? file.path : finalOutputPath };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error(`Transcode failed: ${file.path}`, errorMessage);

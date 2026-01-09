@@ -1,9 +1,13 @@
 /**
  * Configuration module for danger-transcode
  * Provides default configuration and loading from environment/file
+ * Uses Zod for runtime validation, supports JSONC (JSON with comments)
  */
 
+import { parse as parseJsonc } from '@std/jsonc';
 import type { Config } from './types.ts';
+import { ConfigSchema } from './schemas.ts';
+import { ZodError } from 'zod';
 
 /** Default configuration values */
 export const DEFAULT_CONFIG: Config = {
@@ -15,6 +19,7 @@ export const DEFAULT_CONFIG: Config = {
 
   // Database and log paths
   databasePath: '/var/lib/danger-transcode/database.json',
+  analysisPath: '/var/lib/danger-transcode/analysis.json',
   errorLogPath: '/var/lib/danger-transcode/errors.json',
   lockFilePath: '/tmp/danger-transcode.lock',
 
@@ -85,6 +90,9 @@ export const DEFAULT_CONFIG: Config = {
   // Hardware acceleration settings
   useHardwareAccel: true,
 
+  // Hardware profile (auto-detect by default)
+  hardwareProfile: 'auto',
+
   // Dry run mode
   dryRun: false,
 };
@@ -109,8 +117,14 @@ export function loadConfigFromEnv(baseConfig: Config = DEFAULT_CONFIG): Config {
   const dbPath = Deno.env.get('TRANSCODE_DB_PATH');
   if (dbPath) config.databasePath = dbPath;
 
+  const analysisPath = Deno.env.get('TRANSCODE_ANALYSIS_PATH');
+  if (analysisPath) config.analysisPath = analysisPath;
+
   const errorPath = Deno.env.get('TRANSCODE_ERROR_PATH');
   if (errorPath) config.errorLogPath = errorPath;
+
+  const lockPath = Deno.env.get('TRANSCODE_LOCK_PATH');
+  if (lockPath) config.lockFilePath = lockPath;
 
   // Concurrency
   const concurrency = Deno.env.get('TRANSCODE_CONCURRENCY');
@@ -134,9 +148,19 @@ export function loadConfigFromEnv(baseConfig: Config = DEFAULT_CONFIG): Config {
   const hwAccel = Deno.env.get('TRANSCODE_HW_ACCEL');
   if (hwAccel !== undefined) config.useHardwareAccel = hwAccel !== 'false' && hwAccel !== '0';
 
+  // Hardware profile (nvidia, rockchip, software, auto)
+  const hwProfile = Deno.env.get('TRANSCODE_HW_PROFILE');
+  if (hwProfile && ['nvidia', 'rockchip', 'software', 'auto'].includes(hwProfile)) {
+    config.hardwareProfile = hwProfile as 'nvidia' | 'rockchip' | 'software' | 'auto';
+  }
+
   // Dry run
   const dryRun = Deno.env.get('TRANSCODE_DRY_RUN');
   if (dryRun !== undefined) config.dryRun = dryRun === 'true' || dryRun === '1';
+
+  // Transcode list path
+  const transcodeListPath = Deno.env.get('TRANSCODE_LIST_PATH');
+  if (transcodeListPath) config.transcodeListPath = transcodeListPath;
 
   return config;
 }
@@ -147,7 +171,8 @@ export function loadConfigFromEnv(baseConfig: Config = DEFAULT_CONFIG): Config {
 export async function loadConfigFromFile(filePath: string): Promise<Partial<Config>> {
   try {
     const content = await Deno.readTextFile(filePath);
-    return JSON.parse(content) as Partial<Config>;
+    // Use JSONC parser to support comments in config files
+    return parseJsonc(content) as Partial<Config>;
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
       return {};
@@ -162,21 +187,26 @@ export async function loadConfigFromFile(filePath: string): Promise<Partial<Conf
 function getDefaultConfigPaths(): string[] {
   const paths: string[] = [];
 
-  // XDG config home
+  // XDG config home (prefer .jsonc for comments support)
   const xdgConfig = Deno.env.get('XDG_CONFIG_HOME');
   if (xdgConfig) {
+    paths.push(`${xdgConfig}/danger-transcode/config.jsonc`);
     paths.push(`${xdgConfig}/danger-transcode/config.json`);
   }
 
   // User home directory
   const home = Deno.env.get('HOME');
   if (home) {
+    paths.push(`${home}/.config/danger-transcode/config.jsonc`);
     paths.push(`${home}/.config/danger-transcode/config.json`);
+    paths.push(`${home}/.danger-transcode.jsonc`);
     paths.push(`${home}/.danger-transcode.json`);
   }
 
   // System-wide config
+  paths.push('/etc/danger-transcode/config.jsonc');
   paths.push('/etc/danger-transcode/config.json');
+  paths.push('/etc/danger-transcode.jsonc');
   paths.push('/etc/danger-transcode.json');
 
   return paths;
@@ -233,26 +263,38 @@ export async function loadConfig(configFilePath?: string): Promise<Config> {
 }
 
 /**
- * Validate configuration
+ * Validate configuration using Zod schema
+ * Returns array of error messages (empty if valid)
  */
-export function validateConfig(config: Config): string[] {
-  const errors: string[] = [];
+export function validateConfig(config: unknown): string[] {
+  const result = ConfigSchema.safeParse(config);
 
-  if (config.mediaDirs.length === 0) {
-    errors.push('At least one media directory must be specified');
+  if (result.success) {
+    return [];
   }
 
-  if (config.maxConcurrency < 1) {
-    errors.push('maxConcurrency must be at least 1');
-  }
+  // Convert Zod errors to readable messages
+  return result.error.errors.map((err) => {
+    const path = err.path.join('.');
+    return path ? `${path}: ${err.message}` : err.message;
+  });
+}
 
-  if (config.tvMaxHeight < 240) {
-    errors.push('tvMaxHeight must be at least 240');
+/**
+ * Parse and validate configuration, returning typed Config
+ * Throws on validation failure
+ */
+export function parseConfig(config: unknown): Config {
+  try {
+    return ConfigSchema.parse(config);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      const messages = error.errors.map((err) => {
+        const path = err.path.join('.');
+        return path ? `  ${path}: ${err.message}` : `  ${err.message}`;
+      });
+      throw new Error(`Configuration validation failed:\n${messages.join('\n')}`);
+    }
+    throw error;
   }
-
-  if (config.movieMaxHeight < 240) {
-    errors.push('movieMaxHeight must be at least 240');
-  }
-
-  return errors;
 }

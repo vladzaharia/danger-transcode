@@ -1,0 +1,112 @@
+{
+  // ═══════════════════════════════════════════════════════════════════════════
+  // danger-transcode Configuration
+  // Supports: NVIDIA NVENC, Rockchip RKMPP, Software (libx265)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ─── Media Directories ─────────────────────────────────────────────────────
+  // Directories to scan for media files
+  "mediaDirs": ["/mnt/media", "/mnt/overflow"],
+
+  // ─── Working Paths ─────────────────────────────────────────────────────────
+  "tempDir": "/tmp/danger-transcode",
+  "databasePath": "/var/lib/danger-transcode/database.json",
+  "analysisPath": "/var/lib/danger-transcode/analysis.json",
+  "errorLogPath": "/var/lib/danger-transcode/errors.json",
+  "lockFilePath": "/tmp/danger-transcode.lock",
+
+  // ─── Processing Options ────────────────────────────────────────────────────
+  // Number of concurrent transcodes (1-2 recommended for hardware encoding)
+  "maxConcurrency": 1,
+
+  // Maximum resolution for TV shows and movies (won't upscale, only downscale)
+  "tvMaxHeight": 720,      // 720p for TV shows
+  "movieMaxHeight": 1080,  // 1080p for movies
+
+  // Bitrate settings for HEVC encoding (VBR mode)
+  "bitrates": {
+    "low": "2M",     // For 720p and below
+    "medium": "5M",  // For 1080p
+    "high": "15M"    // For 4K and above
+  },
+
+  // ─── File Extensions ───────────────────────────────────────────────────────
+  "videoExtensions": [
+    ".mkv", ".mp4", ".avi", ".mov", ".m4v", ".wmv",
+    ".flv", ".webm", ".ts", ".m2ts", ".mpg", ".mpeg", ".vob"
+  ],
+
+  // ─── Exclusion Rules ───────────────────────────────────────────────────────
+  "exclusions": {
+    // Directory names to skip (case-insensitive)
+    "directories": [
+      "karaoke", "singalong", "samples", "sample", "extras",
+      "featurettes", "behind the scenes", "deleted scenes",
+      "interviews", "trailers"
+    ],
+    // Regex patterns matched against full path
+    "pathPatterns": [],
+    // Regex patterns matched against filename only
+    "filePatterns": [
+      "-sample\\.",    // sample files like movie-sample.mkv
+      "\\bsample\\b",  // word "sample" in filename
+      "\\btrailer\\b"  // trailers
+    ],
+    // Simple string contains check on path
+    "pathContains": []
+  },
+
+  // ─── FFmpeg Configuration ──────────────────────────────────────────────────
+  "ffmpegPath": "ffmpeg",
+  "ffprobePath": "ffprobe",
+  "useHardwareAccel": true,
+
+  // ─── Hardware Profile ──────────────────────────────────────────────────────
+  // Options: "auto" (detect), "nvidia", "rockchip", "software"
+  "hardwareProfile": "auto",
+
+  // NVIDIA NVENC settings (used when hardwareProfile is "nvidia")
+  "nvidia": {
+    "preset": "p5",        // p1 (fastest) to p7 (best quality)
+    "tune": "hq",          // hq, ll (low latency), ull (ultra low latency)
+    "rcMode": "vbr",       // vbr, cbr, constqp
+    "lookahead": 20,       // 0-32 frames lookahead
+    "temporalAq": true,    // Temporal adaptive quantization
+    "spatialAq": false,    // Spatial adaptive quantization
+    "aqStrength": 8,       // AQ strength 1-15 (if spatialAq enabled)
+    "bFrames": 3,          // B-frames 0-4
+    "bRefMode": "middle",  // disabled, each, middle
+    "gopSize": 250         // Keyframe interval
+  },
+
+  // Rockchip RKMPP settings (used when hardwareProfile is "rockchip")
+  "rockchip": {
+    "rcMode": "VBR",  // VBR, CBR, CQP, AVBR
+    "afbc": true,     // ARM Frame Buffer Compression
+    "qp": 23          // Quality for CQP mode (0-51)
+  },
+
+  // Software x265 settings (used when hardwareProfile is "software")
+  "software": {
+    "preset": "medium",  // ultrafast to veryslow
+    "crf": 23,           // Quality 0-51 (lower = better)
+    "tune": "none"       // none, psnr, ssim, grain, fastdecode, zerolatency
+  },
+
+  // ─── Output Configuration ─────────────────────────────────────────────────
+  // By default, transcoded files replace the originals (in-place mode)
+  // Uncomment to output to a separate directory instead
+  // "output": {
+  //   "mode": "separate",        // "in-place" (default) or "separate"
+  //   "directory": "/mnt/transcoded",  // Output directory (required for separate mode)
+  //   "preserveStructure": true  // Keep source directory structure in output
+  // },
+
+  // ─── Selective Transcoding ─────────────────────────────────────────────────
+  // Optional: path to transcode list JSONC for selective transcoding
+  // "transcodeListPath": "transcode-list.jsonc",
+
+  // ─── Runtime Options ───────────────────────────────────────────────────────
+  "dryRun": false  // Set to true to simulate without transcoding
+}
+

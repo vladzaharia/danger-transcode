@@ -1,0 +1,124 @@
+{
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Transcode List for Selective Media Processing
+  // Version 2: Profile-based organization
+  // Only files matching items in this list will be transcoded
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  "version": 2,
+
+  // ─── Profiles ────────────────────────────────────────────────────────────────
+  // Named profiles define common settings for groups of media
+  // Available settings: library, maxHeight, bitrate, inPlace, outputDir, priority
+
+  "profiles": {
+    // TV show profiles
+    "tv-720p": {
+      "library": "tv",
+      "maxHeight": 720,
+      "priority": 0
+    },
+    "tv-1080p": {
+      "library": "tv",
+      "maxHeight": 1080,
+      "priority": 0
+    },
+
+    // Movie profiles
+    "movies-1080p": {
+      "library": "movie",
+      "maxHeight": 1080
+    },
+    "movies-4k": {
+      "library": "movie",
+      "maxHeight": 2160,
+      "bitrate": "25M"
+    },
+
+    // Special purpose profiles
+    "archive": {
+      "library": "both",
+      "maxHeight": 2160,
+      "bitrate": "30M",
+      "priority": -50  // Process last (archival quality takes longer)
+    },
+    "quick-preview": {
+      "library": "both",
+      "maxHeight": 480,
+      "bitrate": "1M",
+      "priority": 100  // Process first
+    }
+  },
+
+  // ─── Media Queries ───────────────────────────────────────────────────────────
+  // Group media by profile name - each item inherits profile settings
+  // Items can override any profile setting
+
+  "media": {
+    // ─── TV at 720p ────────────────────────────────────────────────────────────
+    "tv-720p": [
+      // Simple query - uses all profile defaults
+      { "query": "Breaking Bad" },
+      { "query": "Better Call Saul" },
+
+      // Wildcard matching
+      { "query": "The *" },
+
+      // Season filter - only specific seasons
+      {
+        "query": "Game of Thrones",
+        "seasons": [1, 2, 3, 4]
+      },
+
+      // Override profile priority for this specific item
+      {
+        "query": "The Wire",
+        "priority": 10  // Higher priority than other tv-720p items
+      }
+    ],
+
+    // ─── TV at 1080p ───────────────────────────────────────────────────────────
+    "tv-1080p": [
+      { "query": "House of the Dragon" },
+      { "query": "The Last of Us" },
+
+      // Override resolution for specific show (keep other profile settings)
+      {
+        "query": "Planet Earth*",
+        "maxHeight": 2160  // Nature docs look better at 4K
+      }
+    ],
+
+    // ─── Movies at 1080p ───────────────────────────────────────────────────────
+    "movies-1080p": [
+      // Use year for disambiguation
+      { "query": "Inception (2010)" },
+      { "query": "Interstellar (2014)" },
+
+      // Franchise wildcards
+      { "query": "*Marvel*" },
+      { "query": "*Star Wars*" },
+
+      // Override bitrate for action movies
+      {
+        "query": "John Wick*",
+        "bitrate": "8M"  // Higher bitrate for fast action
+      }
+    ],
+
+    // ─── 4K Movies ─────────────────────────────────────────────────────────────
+    "movies-4k": [
+      { "query": "Dune (2021)" },
+      { "query": "Avatar*" },
+      { "query": "Blade Runner*" }
+    ],
+
+    // ─── Archival Quality ──────────────────────────────────────────────────────
+    "archive": [
+      // Reference quality encodes (processed last due to low priority)
+      { "query": "2001: A Space Odyssey" },
+      { "query": "Lawrence of Arabia" }
+    ]
+  }
+}
+
